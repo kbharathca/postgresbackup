@@ -675,3 +675,131 @@ export async function migrateDatabase(sourceConfig: ConnectionConfig, destConfig
     await destClient.end();
   }
 }
+
+export interface DbComparisonResult {
+  tablesOnlyInSource: string[];
+  tablesOnlyInDest: string[];
+  matchedTables: {
+    name: string;
+    sourceRowCount: number;
+    destRowCount: number;
+    rowMismatched: boolean;
+    schemaMismatched: boolean;
+    columnsOnlyInSource: string[];
+    columnsOnlyInDest: string[];
+    columnTypeMismatches: { column: string; sourceType: string; destType: string }[];
+  }[];
+}
+
+export async function compareDatabases(sourceConfig: ConnectionConfig, destConfig: ConnectionConfig) {
+  const sourceUrl = buildConnectionString(sourceConfig);
+  const destUrl = buildConnectionString(destConfig);
+
+  const sourceClient = new Client({ connectionString: sourceUrl, statement_timeout: 30000 });
+  const destClient = new Client({ connectionString: destUrl, statement_timeout: 30000 });
+
+  try {
+    await sourceClient.connect();
+  } catch (err: any) {
+    return { success: false, error: `Failed to connect to Source DB: ${err.message}` };
+  }
+
+  try {
+    await destClient.connect();
+  } catch (err: any) {
+    await sourceClient.end();
+    return { success: false, error: `Failed to connect to Destination DB: ${err.message}` };
+  }
+
+  try {
+    // 1. Get all public tables & row counts from source
+    const sourceTablesRes = await sourceClient.query(`
+      SELECT table_name, 
+             (xpath('/row/cnt/text()', xmlparse(document query_to_xml(format('select count(*) as cnt from %I', table_name), false, true, ''))))[1]::text::int as row_count
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+    `);
+    const sourceTablesMap = new Map(sourceTablesRes.rows.map(r => [r.table_name, r.row_count]));
+
+    // 2. Get all public tables & row counts from dest
+    const destTablesRes = await destClient.query(`
+      SELECT table_name, 
+             (xpath('/row/cnt/text()', xmlparse(document query_to_xml(format('select count(*) as cnt from %I', table_name), false, true, ''))))[1]::text::int as row_count
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+    `);
+    const destTablesMap = new Map(destTablesRes.rows.map(r => [r.table_name, r.row_count]));
+
+    // Find table name differences
+    const sourceTableNames = Array.from(sourceTablesMap.keys());
+    const destTableNames = Array.from(destTablesMap.keys());
+
+    const tablesOnlyInSource = sourceTableNames.filter(name => !destTablesMap.has(name));
+    const tablesOnlyInDest = destTableNames.filter(name => !sourceTablesMap.has(name));
+    const commonTableNames = sourceTableNames.filter(name => destTablesMap.has(name));
+
+    const matchedTables: DbComparisonResult['matchedTables'] = [];
+
+    // 3. For each common table, fetch column metadata & compare
+    for (const tableName of commonTableNames) {
+      const sourceColsRes = await sourceClient.query(`
+        SELECT column_name, data_type FROM information_schema.columns 
+        WHERE table_name = $1 AND table_schema = 'public'
+      `, [tableName]);
+      const sourceColsMap = new Map(sourceColsRes.rows.map(c => [c.column_name, c.data_type]));
+
+      const destColsRes = await destClient.query(`
+        SELECT column_name, data_type FROM information_schema.columns 
+        WHERE table_name = $1 AND table_schema = 'public'
+      `, [tableName]);
+      const destColsMap = new Map(destColsRes.rows.map(c => [c.column_name, c.data_type]));
+
+      const sourceColNames = Array.from(sourceColsMap.keys());
+      const destColNames = Array.from(destColsMap.keys());
+
+      const columnsOnlyInSource = sourceColNames.filter(c => !destColsMap.has(c));
+      const columnsOnlyInDest = destColNames.filter(c => !sourceColsMap.has(c));
+      const commonCols = sourceColNames.filter(c => destColsMap.has(c));
+
+      const columnTypeMismatches: { column: string; sourceType: string; destType: string }[] = [];
+      for (const col of commonCols) {
+        const srcType = sourceColsMap.get(col);
+        const dstType = destColsMap.get(col);
+        if (srcType !== dstType) {
+          columnTypeMismatches.push({ column: col, sourceType: srcType!, destType: dstType! });
+        }
+      }
+
+      const sourceRowCount = sourceTablesMap.get(tableName) || 0;
+      const destRowCount = destTablesMap.get(tableName) || 0;
+
+      const schemaMismatched = columnsOnlyInSource.length > 0 || columnsOnlyInDest.length > 0 || columnTypeMismatches.length > 0;
+      const rowMismatched = sourceRowCount !== destRowCount;
+
+      matchedTables.push({
+        name: tableName,
+        sourceRowCount,
+        destRowCount,
+        rowMismatched,
+        schemaMismatched,
+        columnsOnlyInSource,
+        columnsOnlyInDest,
+        columnTypeMismatches
+      });
+    }
+
+    const comparison: DbComparisonResult = {
+      tablesOnlyInSource,
+      tablesOnlyInDest,
+      matchedTables
+    };
+
+    return { success: true, comparison };
+  } catch (error: any) {
+    console.error("Comparison error:", error);
+    return { success: false, error: error.message || 'Database comparison failed.' };
+  } finally {
+    await sourceClient.end();
+    await destClient.end();
+  }
+}

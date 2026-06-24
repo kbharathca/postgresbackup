@@ -8,8 +8,8 @@ import {
   ExternalLink, RefreshCw, Layers, Sparkles, Filter, Search, ArrowRightLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { checkConnectionAndGetTables, performBackup, getTableData, migrateDatabase, testDestConnection } from './actions';
-import type { ConnectionConfig } from './actions';
+import { checkConnectionAndGetTables, performBackup, getTableData, migrateDatabase, testDestConnection, compareDatabases } from './actions';
+import type { ConnectionConfig, DbComparisonResult } from './actions';
 
 export default function Home() {
   // ── Connection mode ──────────────────────────────────────────────────
@@ -64,6 +64,21 @@ export default function Home() {
   const [migrationError, setMigrationError] = useState<string | null>(null);
   const [migrationSuccess, setMigrationSuccess] = useState(false);
 
+  // ── Comparison state ─────────────────────────────────────────────────
+  const [showCompareModal, setShowCompareModal] = useState(false);
+  const [compTargetUrl, setCompTargetUrl] = useState('');
+  const [compTargetHost, setCompTargetHost] = useState('');
+  const [compTargetPort, setCompTargetPort] = useState('5432');
+  const [compTargetUser, setCompTargetUser] = useState('');
+  const [compTargetPassword, setCompTargetPassword] = useState('');
+  const [compTargetName, setCompTargetName] = useState('');
+  const [compTargetSslMode, setCompTargetSslMode] = useState('disable');
+  const [compTargetConnectionMode, setCompTargetConnectionMode] = useState<'url' | 'details'>('url');
+
+  const [isComparing, setIsComparing] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [comparisonResult, setComparisonResult] = useState<DbComparisonResult | null>(null);
+
   // ── Derived values ───────────────────────────────────────────────────
   const getConnectionConfig = (): ConnectionConfig => {
     if (connectionMode === 'url') {
@@ -95,6 +110,21 @@ export default function Home() {
     };
   };
 
+  const getCompareDestConfig = (): ConnectionConfig => {
+    if (compTargetConnectionMode === 'url') {
+      return { type: 'url', url: compTargetUrl.trim() };
+    }
+    return {
+      type: 'details',
+      host: compTargetHost.trim(),
+      port: compTargetPort.trim() || '5432',
+      user: compTargetUser.trim(),
+      password: compTargetPassword,
+      database: compTargetName.trim(),
+      sslMode: compTargetSslMode,
+    };
+  };
+
   const canConnect = useMemo(() => {
     if (connectionMode === 'url') return dbUrl.trim().length > 0;
     return dbHost.trim().length > 0 && dbUser.trim().length > 0 && dbName.trim().length > 0;
@@ -104,6 +134,11 @@ export default function Home() {
     if (migTargetConnectionMode === 'url') return migTargetUrl.trim().length > 0;
     return migTargetHost.trim().length > 0 && migTargetUser.trim().length > 0 && migTargetName.trim().length > 0;
   }, [migTargetConnectionMode, migTargetUrl, migTargetHost, migTargetUser, migTargetName]);
+
+  const canCompare = useMemo(() => {
+    if (compTargetConnectionMode === 'url') return compTargetUrl.trim().length > 0;
+    return compTargetHost.trim().length > 0 && compTargetUser.trim().length > 0 && compTargetName.trim().length > 0;
+  }, [compTargetConnectionMode, compTargetUrl, compTargetHost, compTargetUser, compTargetName]);
 
   // Build a preview URL from details mode
   const previewUrl = useMemo(() => {
@@ -128,6 +163,18 @@ export default function Home() {
     if (migTargetSslMode && migTargetSslMode !== 'disable') url += `?sslmode=${migTargetSslMode}`;
     return url;
   }, [migTargetConnectionMode, migTargetHost, migTargetPort, migTargetUser, migTargetPassword, migTargetName, migTargetSslMode]);
+
+  // Destination Comparison URL preview
+  const compPreviewUrl = useMemo(() => {
+    if (compTargetConnectionMode !== 'details') return '';
+    if (!compTargetHost) return '';
+    const u = encodeURIComponent(compTargetUser || 'user');
+    const p = compTargetPassword ? encodeURIComponent(compTargetPassword) : '****';
+    const d = encodeURIComponent(compTargetName || 'dbname');
+    let url = `postgres://${u}:${p}@${compTargetHost}:${compTargetPort || '5432'}/${d}`;
+    if (compTargetSslMode && compTargetSslMode !== 'disable') url += `?sslmode=${compTargetSslMode}`;
+    return url;
+  }, [compTargetConnectionMode, compTargetHost, compTargetPort, compTargetUser, compTargetPassword, compTargetName, compTargetSslMode]);
 
   // For the bash script preview
   const scriptTargetUrl = useMemo(() => {
@@ -327,6 +374,28 @@ export default function Home() {
     }
   };
 
+  const handleCompareDatabases = async () => {
+    if (!canCompare) return;
+    setIsComparing(true);
+    setComparisonError(null);
+    setComparisonResult(null);
+
+    try {
+      const sourceConfig = getConnectionConfig();
+      const destConfig = getCompareDestConfig();
+      const result = await compareDatabases(sourceConfig, destConfig);
+      if (result.success && result.comparison) {
+        setComparisonResult(result.comparison);
+      } else {
+        setComparisonError(result.error || 'Comparison failed');
+      }
+    } catch (err: any) {
+      setComparisonError(err.message || 'An unexpected error occurred during database comparison');
+    } finally {
+      setIsComparing(false);
+    }
+  };
+
   const nativeScript = `#!/bin/bash
 # ==============================================================================
 # PostgreSQL Full Remote Backup Script
@@ -391,16 +460,28 @@ fi
           </div>
           <div className="flex items-center gap-3">
             {tables && (
-              <button 
-                onClick={() => {
-                  setMigrationSuccess(false);
-                  setMigrationError(null);
-                  setShowMigrationModal(true);
-                }}
-                className="px-4.5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-500/20 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/10"
-              >
-                <ArrowRightLeft className="w-4 h-4" /> Live DB Migration
-              </button>
+              <>
+                <button 
+                  onClick={() => {
+                    setComparisonResult(null);
+                    setComparisonError(null);
+                    setShowCompareModal(true);
+                  }}
+                  className="px-4.5 py-2.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-md"
+                >
+                  🔍 Compare DBs
+                </button>
+                <button 
+                  onClick={() => {
+                    setMigrationSuccess(false);
+                    setMigrationError(null);
+                    setShowMigrationModal(true);
+                  }}
+                  className="px-4.5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-500/20 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/10"
+                >
+                  <ArrowRightLeft className="w-4 h-4" /> Live DB Migration
+                </button>
+              </>
             )}
             <a 
               href="https://coolify.io" 
@@ -1175,6 +1256,258 @@ fi
                     {isMigrating ? 'Migrating...' : 'Start Migration'}
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── LIVE COMPARISON MODAL ─── */}
+      <AnimatePresence>
+        {showCompareModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-3xl shadow-2xl my-8 overflow-hidden"
+            >
+              <div className="bg-neutral-950 border-b border-neutral-800 p-5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">🔍</span>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Compare Databases</h3>
+                    <p className="text-xs text-neutral-500 mt-0.5">Find differences in schemas, column definitions, and row counts.</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowCompareModal(false)}
+                  className="text-neutral-500 hover:text-white text-lg font-bold px-2 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6 max-h-[80vh] overflow-y-auto custom-scrollbar">
+                {/* Source DB Summary */}
+                <div className="p-3 bg-blue-500/5 border border-blue-500/10 rounded-xl flex items-center justify-between">
+                  <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Source (A)</span>
+                  <span className="text-xs font-mono text-blue-300 truncate max-w-lg">{scriptTargetUrl}</span>
+                </div>
+
+                {/* Target DB form */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-purple-400">Target Database (B) Configuration</h4>
+                  
+                  {/* Mode Toggles */}
+                  <div className="flex bg-neutral-950 border border-neutral-850 rounded-xl p-1">
+                    <button
+                      onClick={() => setCompTargetConnectionMode('url')}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${
+                        compTargetConnectionMode === 'url' ? 'bg-purple-500/20 text-purple-300 font-semibold' : 'text-neutral-500 hover:text-neutral-300'
+                      }`}
+                    >
+                      Connection URL
+                    </button>
+                    <button
+                      onClick={() => setCompTargetConnectionMode('details')}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${
+                        compTargetConnectionMode === 'details' ? 'bg-purple-500/20 text-purple-300 font-semibold' : 'text-neutral-500 hover:text-neutral-300'
+                      }`}
+                    >
+                      Parameters
+                    </button>
+                  </div>
+
+                  {compTargetConnectionMode === 'url' ? (
+                    <div>
+                      <input
+                        type="text"
+                        value={compTargetUrl}
+                        onChange={(e) => setCompTargetUrl(e.target.value)}
+                        placeholder="postgres://user:password@target-host:5432/target-db"
+                        className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4.5 py-3 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2">
+                          <input
+                            type="text"
+                            value={compTargetHost}
+                            onChange={(e) => setCompTargetHost(e.target.value)}
+                            placeholder="Hostname (e.g. target.host.com)"
+                            className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={compTargetPort}
+                          onChange={(e) => setCompTargetPort(e.target.value)}
+                          placeholder="5432"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="text"
+                          value={compTargetUser}
+                          onChange={(e) => setCompTargetUser(e.target.value)}
+                          placeholder="Username"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                        <input
+                          type="password"
+                          value={compTargetPassword}
+                          onChange={(e) => setCompTargetPassword(e.target.value)}
+                          placeholder="Password"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="text"
+                          value={compTargetName}
+                          onChange={(e) => setCompTargetName(e.target.value)}
+                          placeholder="Database Name"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                        <select
+                          value={compTargetSslMode}
+                          onChange={(e) => setCompTargetSslMode(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer"
+                        >
+                          <option value="disable">disable</option>
+                          <option value="allow">allow</option>
+                          <option value="prefer">prefer</option>
+                          <option value="require">require</option>
+                        </select>
+                      </div>
+                      {compPreviewUrl && (
+                        <div className="bg-neutral-950 border border-neutral-850 rounded-xl p-2.5 text-[10px] text-neutral-500 font-mono break-all leading-normal">
+                          {compPreviewUrl}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {comparisonError && (
+                  <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 font-mono">
+                    ⚠️ {comparisonError}
+                  </div>
+                )}
+
+                {/* Compare Trigger button */}
+                <button
+                  onClick={handleCompareDatabases}
+                  disabled={isComparing || !canCompare}
+                  className="w-full py-4.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-blue-600/30 disabled:to-indigo-600/30 disabled:text-neutral-500 text-white font-bold rounded-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                >
+                  {isComparing ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Compare Databases Now'}
+                </button>
+
+                {/* Comparison Result Render */}
+                {comparisonResult && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-6 pt-4 border-t border-neutral-800"
+                  >
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Comparison Differences Report</h3>
+
+                    {/* Table differences */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 bg-neutral-950 rounded-xl border border-neutral-850">
+                        <h4 className="text-xs font-semibold text-neutral-400 mb-2">Tables only in Source (A)</h4>
+                        {comparisonResult.tablesOnlyInSource.length === 0 ? (
+                          <p className="text-xs text-neutral-600">None</p>
+                        ) : (
+                          <ul className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                            {comparisonResult.tablesOnlyInSource.map(t => (
+                              <li key={t} className="text-xs font-mono text-blue-400">{t}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+
+                      <div className="p-4 bg-neutral-950 rounded-xl border border-neutral-850">
+                        <h4 className="text-xs font-semibold text-neutral-400 mb-2">Tables only in Target (B)</h4>
+                        {comparisonResult.tablesOnlyInDest.length === 0 ? (
+                          <p className="text-xs text-neutral-600">None</p>
+                        ) : (
+                          <ul className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                            {comparisonResult.tablesOnlyInDest.map(t => (
+                              <li key={t} className="text-xs font-mono text-purple-400">{t}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Table-specific details */}
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-semibold text-neutral-400">Common Table Differences Detail</h4>
+                      <div className="space-y-3 max-h-80 overflow-y-auto custom-scrollbar pr-2">
+                        {comparisonResult.matchedTables.map(t => {
+                          const hasDiff = t.rowMismatched || t.schemaMismatched;
+                          return (
+                            <div 
+                              key={t.name} 
+                              className={`p-4 rounded-xl border text-xs ${
+                                hasDiff 
+                                  ? 'bg-amber-500/5 border-amber-500/20' 
+                                  : 'bg-emerald-500/5 border-emerald-500/10'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="font-bold font-mono text-white">{t.name}</span>
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase ${
+                                  hasDiff ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-400'
+                                }`}>
+                                  {hasDiff ? 'Mismatches Found' : 'In Sync'}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2 text-[11px] text-neutral-400 font-mono mb-2">
+                                <div>Source Count: <span className="text-white">{t.sourceRowCount.toLocaleString()}</span></div>
+                                <div>Target Count: <span className="text-white">{t.destRowCount.toLocaleString()}</span></div>
+                              </div>
+
+                              {/* Schema column additions */}
+                              {t.columnsOnlyInSource.length > 0 && (
+                                <div className="mt-2 text-[11px]">
+                                  <span className="text-neutral-500 font-semibold">Columns missing in Target:</span>{' '}
+                                  {t.columnsOnlyInSource.map(col => <code key={col} className="bg-neutral-950 px-1 py-0.5 rounded text-blue-400 mx-0.5">{col}</code>)}
+                                </div>
+                              )}
+
+                              {t.columnsOnlyInDest.length > 0 && (
+                                <div className="mt-1 text-[11px]">
+                                  <span className="text-neutral-500 font-semibold">Columns missing in Source:</span>{' '}
+                                  {t.columnsOnlyInDest.map(col => <code key={col} className="bg-neutral-950 px-1 py-0.5 rounded text-purple-400 mx-0.5">{col}</code>)}
+                                </div>
+                              )}
+
+                              {/* Schema column types mismatches */}
+                              {t.columnTypeMismatches.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  <span className="text-neutral-500 font-semibold text-[11px]">Column Type Mismatches:</span>
+                                  {t.columnTypeMismatches.map(m => (
+                                    <div key={m.column} className="text-[10px] font-mono text-amber-300 pl-2">
+                                      column <code className="text-white font-bold">{m.column}</code>: Source has <code className="text-blue-400">{m.sourceType}</code> but Target has <code className="text-purple-400">{m.destType}</code>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
               </div>
             </motion.div>
           </div>
