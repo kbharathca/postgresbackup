@@ -1,0 +1,6 @@
+{
+  "name": "Postgres Backup Script Generator",
+  "description": "Generate full remote backup scripts for PostgreSQL databases (e.g. Coolify, aaPanel).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
