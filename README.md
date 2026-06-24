@@ -1,5 +1,8 @@
 # Postgres Backup Studio 🐘📁
 
+![Postgres Backup Studio Banner](./assets/promo_banner.png)
+
+
 [![Next.js](https://img.shields.io/badge/Next.js-15.5-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB?style=for-the-badge&logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?style=for-the-badge&logo=typescript)](https://www.typescriptlang.org/)
@@ -24,6 +27,9 @@ Featuring native compatibility for all PostgreSQL versions and a comprehensive q
 ### Live Database-to-Database Migration Modal
 *Synchronize schemas, tables, sequences, constraints, and data across remote connection environments instantly.*
 ![Live Database Migration](./assets/migration.png)
+
+### Migration Features & Promo Graphic
+![Live DB Migration Feature Banner](./assets/promo_migration.png)
 
 ---
 
