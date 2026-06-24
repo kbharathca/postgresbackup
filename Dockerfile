@@ -37,7 +37,7 @@ RUN adduser --system --uid 1001 nextjs
 # This ensures that native fast backups work for postgres 16 and older versions.
 RUN apk add --no-cache postgresql16-client
 
-COPY --from=builder /app/public ./public
+# COPY --from=builder /app/public ./public
 
 # Set the correct permission for prerender cache
 RUN mkdir .next
