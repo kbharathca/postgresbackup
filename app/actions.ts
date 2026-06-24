@@ -216,36 +216,27 @@ async function generateSqlDump(connectionString: string): Promise<string> {
       });
       sql += colDefs.join(',\n') + '\n);\n\n';
 
-      // Export data using COPY format (efficient and PostgreSQL-native)
+      // Export data using INSERT format (best compatibility with simple clients)
       try {
         const dataRes = await client.query(`SELECT * FROM "${tableName}"`);
         if (dataRes.rows.length > 0) {
           const colNames = columnsRes.rows.map((c: any) => `"${c.column_name}"`).join(', ');
           sql += `-- Data for: ${tableName} (${dataRes.rows.length} rows)\n`;
-          sql += `COPY "${tableName}" (${colNames}) FROM stdin;\n`;
-
+          
           for (const dataRow of dataRes.rows) {
             const values = columnsRes.rows.map((c: any) => {
               const val = dataRow[c.column_name];
-              if (val === null || val === undefined) return '\\N';
-              if (val instanceof Date) return val.toISOString();
-              if (typeof val === 'boolean') return val ? 't' : 'f';
+              if (val === null || val === undefined) return 'NULL';
+              if (val instanceof Date) return `'${val.toISOString()}'`;
+              if (typeof val === 'boolean') return val ? 'true' : 'false';
               if (typeof val === 'object') {
-                return JSON.stringify(val)
-                  .replace(/\\/g, '\\\\')
-                  .replace(/\t/g, '\\t')
-                  .replace(/\n/g, '\\n')
-                  .replace(/\r/g, '\\r');
+                return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
               }
-              return String(val)
-                .replace(/\\/g, '\\\\')
-                .replace(/\t/g, '\\t')
-                .replace(/\n/g, '\\n')
-                .replace(/\r/g, '\\r');
+              return `'${String(val).replace(/'/g, "''")}'`;
             });
-            sql += values.join('\t') + '\n';
+            sql += `INSERT INTO "${tableName}" (${colNames}) VALUES (${values.join(', ')});\n`;
           }
-          sql += '\\.\n\n';
+          sql += '\n';
         }
       } catch (dataErr: any) {
         sql += `-- Failed to export data for ${tableName}: ${dataErr.message}\n\n`;
@@ -623,6 +614,19 @@ export async function getTableData(config: ConnectionConfig, tableName: string, 
   }
 }
 
+export async function testDestConnection(config: ConnectionConfig) {
+  const connectionString = buildConnectionString(config);
+  const client = new Client({ connectionString, statement_timeout: 10000 });
+  try {
+    await client.connect();
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to connect to destination database' };
+  } finally {
+    await client.end();
+  }
+}
+
 export async function migrateDatabase(sourceConfig: ConnectionConfig, destConfig: ConnectionConfig) {
   const sourceUrl = buildConnectionString(sourceConfig);
   const destUrl = buildConnectionString(destConfig);
@@ -651,47 +655,10 @@ export async function migrateDatabase(sourceConfig: ConnectionConfig, destConfig
     await destClient.query('BEGIN');
     
     // Split queries by semicolon (simplified execution block parser)
-    // Note: since COPY uses newlines, we parse blocks carefully
     const queries = sqlDump.split(';\n');
-    let copyBlock: string[] | null = null;
-    let copyTable = '';
-
     for (let query of queries) {
       query = query.trim();
       if (!query) continue;
-
-      if (query.startsWith('COPY "')) {
-        // Starts a copy block
-        const match = query.match(/COPY\s+"([^"]+)"/);
-        if (match) {
-          copyTable = match[1];
-          copyBlock = [query];
-        }
-        continue;
-      }
-
-      if (copyBlock) {
-        if (query.includes('\\.')) {
-          // Ends copy block
-          const parts = query.split('\\.');
-          copyBlock.push(parts[0] + '\\.');
-          
-          const fullCopyStatement = copyBlock.join(';\n') + ';';
-          await destClient.query(fullCopyStatement);
-          
-          copyBlock = null;
-          copyTable = '';
-
-          // If there's content after the \. terminator, run it
-          if (parts[1] && parts[1].trim()) {
-            await destClient.query(parts[1].trim() + ';');
-          }
-        } else {
-          copyBlock.push(query);
-        }
-        continue;
-      }
-
       await destClient.query(query + ';');
     }
 

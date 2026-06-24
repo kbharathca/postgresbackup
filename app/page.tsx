@@ -8,7 +8,7 @@ import {
   ExternalLink, RefreshCw, Layers, Sparkles, Filter, Search, ArrowRightLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { checkConnectionAndGetTables, performBackup, getTableData, migrateDatabase } from './actions';
+import { checkConnectionAndGetTables, performBackup, getTableData, migrateDatabase, testDestConnection } from './actions';
 import type { ConnectionConfig } from './actions';
 
 export default function Home() {
@@ -277,6 +277,31 @@ export default function Home() {
       setExportProgress('');
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const [isTestingDest, setIsTestingDest] = useState(false);
+  const [destTestError, setDestTestError] = useState<string | null>(null);
+  const [destTestSuccess, setDestTestSuccess] = useState(false);
+
+  const handleTestConnection = async () => {
+    if (!canMigrate) return;
+    setIsTestingDest(true);
+    setDestTestError(null);
+    setDestTestSuccess(false);
+
+    try {
+      const destConfig = getMigrationDestConfig();
+      const result = await testDestConnection(destConfig);
+      if (result.success) {
+        setDestTestSuccess(true);
+      } else {
+        setDestTestError(result.error || 'Failed to connect to destination database');
+      }
+    } catch (err: any) {
+      setDestTestError(err.message || 'An unexpected error occurred');
+    } finally {
+      setIsTestingDest(false);
     }
   };
 
@@ -1120,14 +1145,36 @@ fi
                   </div>
                 )}
 
-                <button
-                  onClick={handleMigration}
-                  disabled={isMigrating || !canMigrate}
-                  className="w-full py-4.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-600/30 disabled:to-indigo-600/30 disabled:text-neutral-500 text-white font-bold rounded-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shadow-lg shadow-purple-500/10"
-                >
-                  {isMigrating ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRightLeft className="w-5 h-5" />}
-                  {isMigrating ? 'Migrating Database Schema & Data...' : 'Start Live DB-to-DB Migration'}
-                </button>
+                {destTestError && (
+                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 font-mono">
+                    ❌ Destination connection test failed: {destTestError}
+                  </div>
+                )}
+
+                {destTestSuccess && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-400 font-semibold">
+                    ✅ Destination connection test successful! Ready to migrate.
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={isTestingDest || !canMigrate}
+                    className="col-span-1 py-4 bg-neutral-950 border border-neutral-800 hover:border-neutral-700 disabled:opacity-50 text-neutral-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                  >
+                    {isTestingDest ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    Test Link
+                  </button>
+                  <button
+                    onClick={handleMigration}
+                    disabled={isMigrating || !canMigrate}
+                    className="col-span-2 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-600/30 disabled:to-indigo-600/30 disabled:text-neutral-500 text-white font-bold rounded-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shadow-lg shadow-purple-500/10 text-xs"
+                  >
+                    {isMigrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRightLeft className="w-4 h-4" />}
+                    {isMigrating ? 'Migrating...' : 'Start Migration'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
