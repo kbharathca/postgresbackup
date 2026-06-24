@@ -5,10 +5,10 @@ import {
   Database, Terminal, Copy, CheckCircle2, Server, Download, Shield,
   Loader2, Table, HardDrive, FileArchive, Archive, FileCode,
   ChevronLeft, Eye, EyeOff, Link2, SlidersHorizontal, Info, Zap,
-  ExternalLink, RefreshCw, Layers, Sparkles, Filter, Search
+  ExternalLink, RefreshCw, Layers, Sparkles, Filter, Search, ArrowRightLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { checkConnectionAndGetTables, performBackup, getTableData } from './actions';
+import { checkConnectionAndGetTables, performBackup, getTableData, migrateDatabase } from './actions';
 import type { ConnectionConfig } from './actions';
 
 export default function Home() {
@@ -49,6 +49,21 @@ export default function Home() {
   const [tableSearch, setTableSearch] = useState('');
   const [dataSearch, setDataSearch] = useState('');
 
+  // ── Migration state ──────────────────────────────────────────────────
+  const [showMigrationModal, setShowMigrationModal] = useState(false);
+  const [migTargetUrl, setMigTargetUrl] = useState('');
+  const [migTargetHost, setMigTargetHost] = useState('');
+  const [migTargetPort, setMigTargetPort] = useState('5432');
+  const [migTargetUser, setMigTargetUser] = useState('');
+  const [migTargetPassword, setMigTargetPassword] = useState('');
+  const [migTargetName, setMigTargetName] = useState('');
+  const [migTargetSslMode, setMigTargetSslMode] = useState('disable');
+  const [migTargetConnectionMode, setMigTargetConnectionMode] = useState<'url' | 'details'>('url');
+  
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [migrationSuccess, setMigrationSuccess] = useState(false);
+
   // ── Derived values ───────────────────────────────────────────────────
   const getConnectionConfig = (): ConnectionConfig => {
     if (connectionMode === 'url') {
@@ -65,10 +80,30 @@ export default function Home() {
     };
   };
 
+  const getMigrationDestConfig = (): ConnectionConfig => {
+    if (migTargetConnectionMode === 'url') {
+      return { type: 'url', url: migTargetUrl.trim() };
+    }
+    return {
+      type: 'details',
+      host: migTargetHost.trim(),
+      port: migTargetPort.trim() || '5432',
+      user: migTargetUser.trim(),
+      password: migTargetPassword,
+      database: migTargetName.trim(),
+      sslMode: migTargetSslMode,
+    };
+  };
+
   const canConnect = useMemo(() => {
     if (connectionMode === 'url') return dbUrl.trim().length > 0;
     return dbHost.trim().length > 0 && dbUser.trim().length > 0 && dbName.trim().length > 0;
   }, [connectionMode, dbUrl, dbHost, dbUser, dbName]);
+
+  const canMigrate = useMemo(() => {
+    if (migTargetConnectionMode === 'url') return migTargetUrl.trim().length > 0;
+    return migTargetHost.trim().length > 0 && migTargetUser.trim().length > 0 && migTargetName.trim().length > 0;
+  }, [migTargetConnectionMode, migTargetUrl, migTargetHost, migTargetUser, migTargetName]);
 
   // Build a preview URL from details mode
   const previewUrl = useMemo(() => {
@@ -81,6 +116,18 @@ export default function Home() {
     if (dbSslMode && dbSslMode !== 'disable') url += `?sslmode=${dbSslMode}`;
     return url;
   }, [connectionMode, dbHost, dbPort, dbUser, dbPassword, dbName, dbSslMode]);
+
+  // Destination Migration URL preview
+  const destPreviewUrl = useMemo(() => {
+    if (migTargetConnectionMode !== 'details') return '';
+    if (!migTargetHost) return '';
+    const u = encodeURIComponent(migTargetUser || 'user');
+    const p = migTargetPassword ? encodeURIComponent(migTargetPassword) : '****';
+    const d = encodeURIComponent(migTargetName || 'dbname');
+    let url = `postgres://${u}:${p}@${migTargetHost}:${migTargetPort || '5432'}/${d}`;
+    if (migTargetSslMode && migTargetSslMode !== 'disable') url += `?sslmode=${migTargetSslMode}`;
+    return url;
+  }, [migTargetConnectionMode, migTargetHost, migTargetPort, migTargetUser, migTargetPassword, migTargetName, migTargetSslMode]);
 
   // For the bash script preview
   const scriptTargetUrl = useMemo(() => {
@@ -233,6 +280,28 @@ export default function Home() {
     }
   };
 
+  const handleMigration = async () => {
+    if (!canMigrate) return;
+    setIsMigrating(true);
+    setMigrationError(null);
+    setMigrationSuccess(false);
+
+    try {
+      const sourceConfig = getConnectionConfig();
+      const destConfig = getMigrationDestConfig();
+      const result = await migrateDatabase(sourceConfig, destConfig);
+      if (result.success) {
+        setMigrationSuccess(true);
+      } else {
+        setMigrationError(result.error || 'Migration failed');
+      }
+    } catch (err: any) {
+      setMigrationError(err.message || 'An unexpected error occurred during migration');
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
   const nativeScript = `#!/bin/bash
 # ==============================================================================
 # PostgreSQL Full Remote Backup Script
@@ -289,13 +358,25 @@ fi
               <div className="flex items-center gap-2">
                 <h1 className="text-3xl font-bold text-white tracking-tight">Postgres Backup Studio</h1>
                 <span className="px-2.5 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded-full text-xs text-blue-400 font-semibold flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" /> v2.0
+                  <Sparkles className="w-3 h-3" /> v2.1
                 </span>
               </div>
-              <p className="text-neutral-400 mt-1">Explore, view table records, and download compressed archives for all PostgreSQL versions.</p>
+              <p className="text-neutral-400 mt-1">Explore, view table records, copy schema, and execute dynamic database-to-database migrations.</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {tables && (
+              <button 
+                onClick={() => {
+                  setMigrationSuccess(false);
+                  setMigrationError(null);
+                  setShowMigrationModal(true);
+                }}
+                className="px-4.5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-500/20 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/10"
+              >
+                <ArrowRightLeft className="w-4 h-4" /> Live DB Migration
+              </button>
+            )}
             <a 
               href="https://coolify.io" 
               target="_blank" 
@@ -890,6 +971,182 @@ fi
           </div>
         </div>
       </div>
+
+      {/* ─── LIVE MIGRATION MODAL ─── */}
+      <AnimatePresence>
+        {showMigrationModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden"
+            >
+              <div className="bg-neutral-950 border-b border-neutral-800 p-5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <ArrowRightLeft className="w-5 h-5 text-purple-400 animate-pulse" />
+                  <div>
+                    <h3 className="text-base font-bold text-white">Live Postgres Migration</h3>
+                    <p className="text-xs text-neutral-500 mt-0.5">Move tables, schemas, constraints, and data directly</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowMigrationModal(false)}
+                  className="text-neutral-500 hover:text-white text-lg font-bold px-2 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5">
+                {/* Source Database Display */}
+                <div className="p-3 bg-blue-500/5 border border-blue-500/10 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-blue-400" />
+                    <span className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">Source DB</span>
+                  </div>
+                  <span className="text-xs font-mono text-blue-300 font-semibold truncate max-w-xs">{scriptTargetUrl}</span>
+                </div>
+
+                <div className="h-[1px] bg-neutral-800"></div>
+
+                {/* Target Database Form */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-purple-400">Destination Database Configuration</h4>
+                  
+                  {/* Mode Toggles */}
+                  <div className="flex bg-neutral-950 border border-neutral-850 rounded-xl p-1">
+                    <button
+                      onClick={() => setMigTargetConnectionMode('url')}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${
+                        migTargetConnectionMode === 'url' ? 'bg-purple-500/20 text-purple-300 font-semibold' : 'text-neutral-500 hover:text-neutral-300'
+                      }`}
+                    >
+                      Connection URL
+                    </button>
+                    <button
+                      onClick={() => setMigTargetConnectionMode('details')}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${
+                        migTargetConnectionMode === 'details' ? 'bg-purple-500/20 text-purple-300 font-semibold' : 'text-neutral-500 hover:text-neutral-300'
+                      }`}
+                    >
+                      Parameters
+                    </button>
+                  </div>
+
+                  {migTargetConnectionMode === 'url' ? (
+                    <div>
+                      <input
+                        type="text"
+                        value={migTargetUrl}
+                        onChange={(e) => setMigTargetUrl(e.target.value)}
+                        placeholder="postgres://user:password@dest-host:5432/dest-db"
+                        className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4.5 py-3 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2">
+                          <input
+                            type="text"
+                            value={migTargetHost}
+                            onChange={(e) => setMigTargetHost(e.target.value)}
+                            placeholder="Hostname (e.g. localhost)"
+                            className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={migTargetPort}
+                          onChange={(e) => setMigTargetPort(e.target.value)}
+                          placeholder="5432"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="text"
+                          value={migTargetUser}
+                          onChange={(e) => setMigTargetUser(e.target.value)}
+                          placeholder="Username"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                        <input
+                          type="password"
+                          value={migTargetPassword}
+                          onChange={(e) => setMigTargetPassword(e.target.value)}
+                          placeholder="Password"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="text"
+                          value={migTargetName}
+                          onChange={(e) => setMigTargetName(e.target.value)}
+                          placeholder="Database Name"
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        />
+                        <select
+                          value={migTargetSslMode}
+                          onChange={(e) => setMigTargetSslMode(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer"
+                        >
+                          <option value="disable">disable</option>
+                          <option value="allow">allow</option>
+                          <option value="prefer">prefer</option>
+                          <option value="require">require</option>
+                        </select>
+                      </div>
+                      {destPreviewUrl && (
+                        <div className="bg-neutral-950 border border-neutral-850 rounded-xl p-2.5 text-[10px] text-neutral-500 font-mono break-all leading-normal">
+                          {destPreviewUrl}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {migrationError && (
+                  <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                    {migrationError}
+                  </div>
+                )}
+
+                {migrationSuccess && (
+                  <div className="p-4.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-400 font-semibold flex items-center gap-2">
+                    ✅ Migration completed successfully! All tables and data have been copied to the destination database.
+                  </div>
+                )}
+
+                <button
+                  onClick={handleMigration}
+                  disabled={isMigrating || !canMigrate}
+                  className="w-full py-4.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-600/30 disabled:to-indigo-600/30 disabled:text-neutral-500 text-white font-bold rounded-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shadow-lg shadow-purple-500/10"
+                >
+                  {isMigrating ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRightLeft className="w-5 h-5" />}
+                  {isMigrating ? 'Migrating Database Schema & Data...' : 'Start Live DB-to-DB Migration'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom scrollbar styles */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background-color: #3f3f46;
+          border-radius: 10px;
+        }
+      ` }} />
     </div>
   );
 }

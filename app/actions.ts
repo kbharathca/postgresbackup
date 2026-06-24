@@ -622,3 +622,89 @@ export async function getTableData(config: ConnectionConfig, tableName: string, 
     await client.end();
   }
 }
+
+export async function migrateDatabase(sourceConfig: ConnectionConfig, destConfig: ConnectionConfig) {
+  const sourceUrl = buildConnectionString(sourceConfig);
+  const destUrl = buildConnectionString(destConfig);
+
+  const sourceClient = new Client({ connectionString: sourceUrl, statement_timeout: 180000 });
+  const destClient = new Client({ connectionString: destUrl, statement_timeout: 180000 });
+
+  try {
+    await sourceClient.connect();
+  } catch (err: any) {
+    return { success: false, error: `Failed to connect to Source DB: ${err.message}` };
+  }
+
+  try {
+    await destClient.connect();
+  } catch (err: any) {
+    await sourceClient.end();
+    return { success: false, error: `Failed to connect to Destination DB: ${err.message}` };
+  }
+
+  try {
+    // 1. Generate full SQL dump from source database
+    const sqlDump = await generateSqlDump(sourceUrl);
+
+    // 2. Run the SQL dump on the destination database in a transaction
+    await destClient.query('BEGIN');
+    
+    // Split queries by semicolon (simplified execution block parser)
+    // Note: since COPY uses newlines, we parse blocks carefully
+    const queries = sqlDump.split(';\n');
+    let copyBlock: string[] | null = null;
+    let copyTable = '';
+
+    for (let query of queries) {
+      query = query.trim();
+      if (!query) continue;
+
+      if (query.startsWith('COPY "')) {
+        // Starts a copy block
+        const match = query.match(/COPY\s+"([^"]+)"/);
+        if (match) {
+          copyTable = match[1];
+          copyBlock = [query];
+        }
+        continue;
+      }
+
+      if (copyBlock) {
+        if (query.includes('\\.')) {
+          // Ends copy block
+          const parts = query.split('\\.');
+          copyBlock.push(parts[0] + '\\.');
+          
+          const fullCopyStatement = copyBlock.join(';\n') + ';';
+          await destClient.query(fullCopyStatement);
+          
+          copyBlock = null;
+          copyTable = '';
+
+          // If there's content after the \. terminator, run it
+          if (parts[1] && parts[1].trim()) {
+            await destClient.query(parts[1].trim() + ';');
+          }
+        } else {
+          copyBlock.push(query);
+        }
+        continue;
+      }
+
+      await destClient.query(query + ';');
+    }
+
+    await destClient.query('COMMIT');
+    return { success: true };
+  } catch (error: any) {
+    console.error("Migration error:", error);
+    try {
+      await destClient.query('ROLLBACK');
+    } catch (rbErr) {}
+    return { success: false, error: error.message || 'Migration execution failed.' };
+  } finally {
+    await sourceClient.end();
+    await destClient.end();
+  }
+}
