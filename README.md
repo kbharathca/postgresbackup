@@ -43,6 +43,7 @@ Featuring native compatibility for all PostgreSQL versions and a comprehensive q
 ### 2. 📦 Universal Backup & Export Engine
 Generate high-fidelity PostgreSQL schemas and data representations matching standard db client structures.
 *   **Plain SQL (`.sql`)**: Human-readable SQL commands creating extensions, enums, sequences, schemas, indexes, constraints, and tables.
+*   **Cloudflare D1 / SQLite (`_sqlite.sql`)**: Instantly converts Postgres database dialects into standard SQLite commands. Perfect for exporting database schemas and records directly into Cloudflare D1.
 *   **Custom Binary Dump (`.dump`)**: Fast compressed binary streams compatible with standard logical restore clients (`pg_restore`).
 *   **Tar Archive (`.tar`)**: Grouped schema catalog details archived inside uncompressed tar format.
 *   **Directory Format (`.zip`)**: Multi-file zipped schema layouts enabling parallel table-level extraction.
@@ -66,13 +67,20 @@ Migrate databases instantly from the user interface.
 *   Runs query blocks sequentially inside a secure database transaction (`BEGIN` ... `COMMIT`) on the Target (B) database.
 *   Fully rolls back (`ROLLBACK`) on errors to preserve database state.
 
-### 5. 🔍 Real-Time Database Catalog Inspector
+### 5. ⚡ Cloudflare D1 / SQLite Dialect Converter (pg2sqlite)
+Export PostgreSQL databases directly into ready-to-run SQLite syntax:
+*   **Data Type Mapping**: Seamlessly translates PostgreSQL data structures (e.g. `uuid`, `varchar`, `timestamp`, `jsonb`) into compatible SQLite types (`TEXT`, `INTEGER`, etc.).
+*   **Auto-Increment Mapping**: Translates sequence defaults and serial types into `INTEGER PRIMARY KEY AUTOINCREMENT`.
+*   **Constraint Preservation**: Safely comments out postgres-only foreign constraints, custom sequences, and alter statements that would throw SQLite import errors.
+*   **Values Adaptor**: Re-maps PostgreSQL booleans (`true`/`false`) to SQLite integers (`1`/`0`) and properly formats string literals.
+
+### 6. 🔍 Real-Time Database Catalog Inspector
 *   **Visual Catalog List**: Instantly view table list indexes and row counts within the public schema.
 *   **Schema Filtration**: Real-time fuzzy searching to filter tables index listings.
 *   **Interactive Grid View**: Paginated record grids showing columns, data types, and values.
 *   **Record Level Filtering**: Search table records locally from the grid.
 
-### 6. 🐚 Automation Shell Scripts
+### 7. 🐚 Automation Shell Scripts
 Copy fully parameterized, timestamped bash scripts for setup inside Coolify cron-jobs, systemd timers, or aaPanel automated backup scripts.
 
 ---
