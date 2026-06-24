@@ -4,6 +4,18 @@ A modern, high-performance database management companion designed for PostgreSQL
 
 Designed to work flawlessly as a standalone application, a local utility, or hosted via **Coolify** / Docker containers.
 
+Live Application: **[postgresbackup.apps.tirupatihost.in](https://postgresbackup.apps.tirupatihost.in/)**
+
+---
+
+## 📸 Screenshots
+
+### Database Dashboard View
+![Database Dashboard View](./assets/dashboard.png)
+
+### Live Database-to-Database Migration Modal
+![Live Database Migration](./assets/migration.png)
+
 ---
 
 ## 🌟 Key Features
@@ -21,6 +33,8 @@ Designed to work flawlessly as a standalone application, a local utility, or hos
   * View public schema table catalogs with dynamic pagination.
   * Real-time search/filter inputs across catalog lists and table records.
   * Sleek data representation displaying null values and columns with custom-styled scrollbars.
+* **⚡ Live Database Comparison Tool**: Compare two separate databases instantly to find structural column differences, missing tables, and row count discrepancies.
+* **🔄 Live DB Migration**: Copy schemas, tables, constraints, sequences, and row data from a source database directly to a destination target in a transaction.
 * **🐚 Shell Script Generator**: Dynamic script output generator configured with your connection details for automated backup automation.
 * **✨ Gorgeous User Interface**: Built using React 19, Tailwind CSS 4, and powered by `framer-motion` for fluid desktop-grade transitions.
 
