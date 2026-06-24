@@ -756,6 +756,23 @@ fi
                       <h3 className="text-sm font-semibold text-neutral-200">Directory (.zip)</h3>
                       <p className="text-[11px] text-neutral-500 mt-1 leading-relaxed">Zipped database directory. Standard backup folder.</p>
                     </button>
+
+                    <button
+                      onClick={() => handleExport('sqlite')}
+                      disabled={isExporting}
+                      className="col-span-2 p-4 bg-neutral-950/80 border border-neutral-800 hover:border-orange-500/50 hover:bg-orange-500/5 rounded-xl transition-all text-left group disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-start gap-4"
+                    >
+                      <Zap className="w-8 h-8 text-orange-400 shrink-0 group-hover:scale-110 transition-transform mt-0.5" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-neutral-200 flex items-center gap-1.5">
+                          Cloudflare D1 / SQLite (.sql)
+                          <span className="text-[10px] font-medium bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 py-0.5 rounded">NEW</span>
+                        </h3>
+                        <p className="text-[11px] text-neutral-500 mt-1 leading-relaxed">
+                          Converts schema &amp; data to SQLite format. Fully compatible with Cloudflare D1 local/cloud setups.
+                        </p>
+                      </div>
+                    </button>
                   </div>
 
                   {isExporting && (

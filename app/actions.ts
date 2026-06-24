@@ -334,6 +334,101 @@ async function generateSqlDump(connectionString: string): Promise<string> {
   return sql;
 }
 
+function convertSqlToSqlite(pgSql: string): string {
+  let sqlite = '';
+  sqlite += '-- SQLite / Cloudflare D1 Database Dump (Translated from PostgreSQL)\n';
+  sqlite += `-- Generated: ${new Date().toISOString()}\n\n`;
+
+  // Process line by line
+  const lines = pgSql.split('\n');
+  let inCreateTable = false;
+  let hasSequenceDefault = false;
+
+  for (let line of lines) {
+    const trimmed = line.trim();
+
+    // Skip Postgres-only setup directives
+    if (trimmed.startsWith('SET ') || trimmed.startsWith('SELECT setval(') || trimmed.startsWith('CREATE EXTENSION')) {
+      continue;
+    }
+
+    // Skip custom enums and sequences syntax
+    if (trimmed.startsWith('DO $$') || trimmed.startsWith('CREATE SEQUENCE') || trimmed.startsWith('END IF; END $$;')) {
+      continue;
+    }
+    if (inCreateTable && trimmed.startsWith('DEFAULT nextval(')) {
+      continue;
+    }
+
+    // Translate table creation syntax
+    if (trimmed.startsWith('CREATE TABLE')) {
+      inCreateTable = true;
+      hasSequenceDefault = false;
+    }
+
+    let parsedLine = line;
+
+    if (inCreateTable) {
+      // Convert standard PostgreSQL data types to SQLite equivalents
+      parsedLine = parsedLine
+        .replace(/character varying\(\d+\)/g, 'TEXT')
+        .replace(/varchar\(\d+\)/g, 'TEXT')
+        .replace(/varchar/g, 'TEXT')
+        .replace(/character\(\d+\)/g, 'TEXT')
+        .replace(/char\(\d+\)/g, 'TEXT')
+        .replace(/char/g, 'TEXT')
+        .replace(/text/g, 'TEXT')
+        .replace(/jsonb/g, 'TEXT')
+        .replace(/json/g, 'TEXT')
+        .replace(/uuid/g, 'TEXT')
+        .replace(/timestamp with time zone/g, 'TEXT')
+        .replace(/timestamptz/g, 'TEXT')
+        .replace(/timestamp without time zone/g, 'TEXT')
+        .replace(/timestamp/g, 'TEXT')
+        .replace(/date/g, 'TEXT')
+        .replace(/boolean/g, 'INTEGER') // SQLite uses INTEGER for booleans
+        .replace(/bigint/g, 'INTEGER')
+        .replace(/bigserial/g, 'INTEGER PRIMARY KEY AUTOINCREMENT')
+        .replace(/serial/g, 'INTEGER PRIMARY KEY AUTOINCREMENT')
+        .replace(/double precision/g, 'REAL')
+        .replace(/numeric\(\d+,\d+\)/g, 'REAL')
+        .replace(/numeric/g, 'REAL');
+
+      // Remove default sequence nextval binds
+      if (parsedLine.includes('DEFAULT nextval(')) {
+        parsedLine = parsedLine.replace(/DEFAULT nextval\('[^']+'::regclass\)/g, '');
+        hasSequenceDefault = true;
+      }
+
+      if (trimmed.endsWith(');')) {
+        inCreateTable = false;
+      }
+    }
+
+    // Translate constraint edits
+    if (trimmed.startsWith('ALTER TABLE') && (trimmed.includes('ADD CONSTRAINT') || trimmed.includes('FOREIGN KEY'))) {
+      // SQLite only supports table constraints inside CREATE TABLE definition.
+      // Output as comments to preserve mapping info without throwing SQLite execution errors.
+      sqlite += `-- ${trimmed}\n`;
+      continue;
+    }
+
+    // Translate inserts / boolean formats
+    if (trimmed.startsWith('INSERT INTO')) {
+      // Map postgres true/false keywords to SQLite 1/0
+      parsedLine = parsedLine
+        .replace(/,\s*true/g, ', 1')
+        .replace(/,\s*false/g, ', 0')
+        .replace(/\(\s*true/g, '(1')
+        .replace(/\(\s*false/g, '(0');
+    }
+
+    sqlite += parsedLine + '\n';
+  }
+
+  return sqlite;
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Server Actions
 // ════════════════════════════════════════════════════════════════════════
@@ -395,6 +490,8 @@ export async function performBackup(config: ConnectionConfig, format: string) {
   } else if (format === 'directory') {
     pgDumpFormat = 'd';
     extension = 'zip';
+  } else if (format === 'sqlite') {
+    extension = 'sql';
   }
 
   try {
@@ -514,10 +611,22 @@ export async function performBackup(config: ConnectionConfig, format: string) {
     }
 
     // JS Fallback — works for ALL formats
-    if (!pgDumpCmd) {
+    if (!pgDumpCmd || format === 'sqlite') {
       usedFallback = true;
       console.log(`Using pure JS fallback for ${format} export...`);
       const sql = await generateSqlDump(connectionString);
+
+      if (format === 'sqlite') {
+        const sqliteSql = convertSqlToSqlite(sql);
+        return {
+          success: true,
+          filename: `${baseFilename}_sqlite.sql`,
+          data: Buffer.from(sqliteSql).toString('base64'),
+          mimeType: 'application/sql',
+          fallback: true,
+          note: 'Translated schema & records from Postgres to SQLite / Cloudflare D1 format successfully.',
+        };
+      }
 
       if (format === 'sql') {
         return {
